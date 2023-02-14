@@ -35,6 +35,12 @@ if [ ! -e ${OUTDIR}/linux-stable/arch/${ARCH}/boot/Image ]; then
     git checkout ${KERNEL_VERSION}
 
     # TODO: Add your kernel build steps here
+    make ARCH=arm64 CROSS_COMPILE=aarch64-none-linux-gnu- mrproper
+    make ARCH=arm64 CROSS_COMPILE=aarch64-none-linux-gnu- defconfig
+    make ARCH=arm64 CROSS_COMPILE=aarch64-none-linux-gnu- all
+    # make ARCH=arm64 CROSS_COMPILE=aarch64-none-linux-gnu- modules # Skip the modules_install step discussed in the video content.  The modules generated with the default kernel build are too large to fit in the initramfs with default memory.  Alternatively you can increase the -m  argument in the start qemu scripts to a value large enough to fit (currently must be >512m).  You don't need modules for the simple example we use in assignment 3.
+    make ARCH=arm64 CROSS_COMPILE=aarch64-none-linux-gnu- dtbs
+
 fi
 
 echo "Adding the Image in outdir"
@@ -48,6 +54,9 @@ then
 fi
 
 # TODO: Create necessary base directories
+mkdir -p rootfs/{bin,dev,etc,home,lib,lib64,proc,sbin,sys,tmp,user,var}
+mkdir -p rootfs/usr/{bin,lib,sbin}
+mkdir -p rootfs/var/log
 
 cd "$OUTDIR"
 if [ ! -d "${OUTDIR}/busybox" ]
@@ -56,25 +65,52 @@ git clone git://busybox.net/busybox.git
     cd busybox
     git checkout ${BUSYBOX_VERSION}
     # TODO:  Configure busybox
+    make distclean
+    make defconfig
 else
     cd busybox
 fi
 
 # TODO: Make and install busybox
+make ARCH=${ARCH} CROSS_COMPILE=${CROSS_COMPILE}
+make CONFIG_PREFIX="${OUTDIR}/rootfs"  ARCH=${ARCH} CROSS_COMPILE=${CROSS_COMPILE} install
+
+cd "${OUTDIR}/rootfs"
 
 echo "Library dependencies"
 ${CROSS_COMPILE}readelf -a bin/busybox | grep "program interpreter"
 ${CROSS_COMPILE}readelf -a bin/busybox | grep "Shared library"
 
 # TODO: Add library dependencies to rootfs
+export SYSROOT=$(aarch64-none-linux-gnu-gcc -print-sysroot)
+cp "${SYSROOT}/lib/ld-linux-aarch64.so.1" "${OUTDIR}/rootfs/lib/"
+cp "${SYSROOT}/lib64/libm.so.6" "${OUTDIR}/rootfs/lib64/"
+cp "${SYSROOT}/lib64/libresolv.so.2" "${OUTDIR}/rootfs/lib64/"
+cp "${SYSROOT}/lib64/libc.so.6" "${OUTDIR}/rootfs/lib64/"
 
 # TODO: Make device nodes
+cd "${OUTDIR}/rootfs"
+sudo mknod -m 666 dev/null c 1 3
+sudo mknod -m 600 dev/console c 5 1
 
 # TODO: Clean and build the writer utility
 
+cd $FINDER_APP_DIR
+make clean 
+make CROSS_COMPILE=${CROSS_COMPILE}
+
 # TODO: Copy the finder related scripts and executables to the /home directory
 # on the target rootfs
+cp -f writer finder.sh finder-test.sh autorun-qemu.sh "${OUTDIR}/rootfs/home"
+mkdir -p  "${OUTDIR}/rootfs/home/conf"
+cp -f conf/username.txt conf/assignment.txt  "${OUTDIR}/rootfs/home/conf"
+
 
 # TODO: Chown the root directory
+cd "${OUTDIR}/rootfs"
+sudo chown -R root:root *
 
 # TODO: Create initramfs.cpio.gz
+sudo find . | cpio -H newc -ov --owner root:root > ${OUTDIR}/initramfs.cpio
+cd .. 
+sudo gzip -f initramfs.cpio
